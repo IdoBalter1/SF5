@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Disease Spread Simulator</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <h1>Disease Spread Simulator</h1>
+        <p>
+          Run a simple susceptible-infected-recovered simulation on a random
+          network. Adjust the parameters and hit "Simulate" to see how the curve
+          changes.
+        </p>
+      </header>
+
+      <section class="layout">
+        <form id="sim-form" class="panel">
+          <div class="field">
+            <label for="numNodes">Population size</label>
+            <input
+              id="numNodes"
+              name="numNodes"
+              type="number"
+              min="10"
+              value="100"
+            />
+          </div>
+          <div class="field">
+            <label for="networkType">Network type</label>
+            <select id="networkType" name="networkType">
+              <option value="poisson" selected>Poisson (random)</option>
+              <option value="geometric">Geometric</option>
+              <option value="powerlaw">Power-law</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="avgDegree">Average degree (connectivity)</label>
+            <input
+              id="avgDegree"
+              name="avgDegree"
+              type="number"
+              min="0.1"
+              step="0.1"
+              value="4.0"
+            />
+          </div>
+          <div class="field">
+            <label for="infectionProb">Infection probability (0-1)</label>
+            <div class="slider-row">
+              <input
+                id="infectionProb"
+                name="infectionProb"
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value="0.6"
+              />
+              <span id="infectionProbVal">0.6</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="initialInfected">Initially infected</label>
+            <input
+              id="initialInfected"
+              name="initialInfected"
+              type="number"
+              min="1"
+              value="3"
+            />
+          </div>
+          <button type="submit">Simulate</button>
+          <p class="note">
+            The underlying model uses the project’s
+            <code>simulate_epidemic</code>
+            routine on a random network.
+          </p>
+        </form>
+
+        <section class="panel">
+          <h2>Results</h2>
+          <div class="viz-row">
+            <div class="chart-wrap">
+              <canvas id="chart"></canvas>
+            </div>
+            <div class="graph-wrap">
+              <canvas id="graph"></canvas>
+            </div>
+          </div>
+          <div class="legend-inline">
+            <span class="pill pill-s">Susceptible</span>
+            <span class="pill pill-i">Infected</span>
+            <span class="pill pill-r">Recovered</span>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const form = document.getElementById("sim-form");
+      const chartCtx = document.getElementById("chart").getContext("2d");
+      const graphCanvas = document.getElementById("graph");
+      const graphCtx = graphCanvas.getContext("2d");
+      let chart;
+
+      function buildPayload(formData) {
+        const payload = {};
+        ["numNodes", "avgDegree", "initialInfected"].forEach((key) => {
+          const val = formData.get(key);
+          if (val !== "") payload[key] = Number(val);
+        });
+        const infectionProb = formData.get("infectionProb");
+        if (infectionProb !== "") payload.infectionProb = Number(infectionProb);
+        const netType = formData.get("networkType");
+        if (netType) payload.networkType = netType;
+        return payload;
+      }
+
+      function drawGraph(graph) {
+        const { nodes, edges } = graph;
+        const padding = 12;
+
+        // Ensure square canvas so the circle layout isn't stretched
+        const size = Math.min(graphCanvas.clientWidth || 300, 500);
+        graphCanvas.width = size;
+        graphCanvas.height = size;
+        const w = size;
+        const h = size;
+        graphCtx.clearRect(0, 0, w, h);
+
+        // Edges
+        graphCtx.strokeStyle = "#ef4444";
+        graphCtx.lineWidth = 1.2;
+        edges.forEach(({ source, target }) => {
+          const a = nodes.find((n) => n.id === source);
+          const b = nodes.find((n) => n.id === target);
+          if (!a || !b) return;
+          const x1 = padding + a.x * (w - 2 * padding);
+          const y1 = padding + a.y * (h - 2 * padding);
+          const x2 = padding + b.x * (w - 2 * padding);
+          const y2 = padding + b.y * (h - 2 * padding);
+          graphCtx.beginPath();
+          graphCtx.moveTo(x1, y1);
+          graphCtx.lineTo(x2, y2);
+          graphCtx.stroke();
+        });
+
+        // Nodes
+        graphCtx.fillStyle = "#9ca3af";
+        nodes.forEach(({ x, y }) => {
+          const cx = padding + x * (w - 2 * padding);
+          const cy = padding + y * (h - 2 * padding);
+          graphCtx.beginPath();
+          graphCtx.arc(cx, cy, 4, 0, Math.PI * 2);
+          graphCtx.fill();
+        });
+      }
+
+      function renderChart(weeks, susceptible, infected, recovered) {
+        const datasetConfig = (label, data, color) => ({
+          label,
+          data,
+          borderColor: color,
+          backgroundColor: color + "33",
+          tension: 0.15,
+          fill: false,
+        });
+
+        if (chart) {
+          chart.data.labels = weeks;
+          chart.data.datasets[0].data = susceptible;
+          chart.data.datasets[1].data = infected;
+          chart.data.datasets[2].data = recovered;
+          chart.update();
+          return;
+        }
+
+        chart = new Chart(chartCtx, {
+          type: "line",
+          data: {
+            labels: weeks,
+            datasets: [
+              datasetConfig("Susceptible", susceptible, "#2563eb"),
+              datasetConfig("Infected", infected, "#dc2626"),
+              datasetConfig("Recovered", recovered, "#16a34a"),
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: {
+              duration: 1200,
+              easing: "easeInOutQuart",
+            },
+            plugins: {
+              legend: { display: false },
+            },
+            scales: {
+              y: { beginAtZero: true },
+              x: { title: { display: true, text: "Week" } },
+            },
+          },
+        });
+      }
+
+      async function runSimulation(event) {
+        event.preventDefault();
+
+        const payload = buildPayload(new FormData(form));
+        const res = await fetch("/simulate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          summaryBox.textContent =
+            "Simulation failed. Check console for details.";
+          return;
+        }
+
+        const data = await res.json();
+        renderChart(
+          data.weeks,
+          data.susceptible,
+          data.infected,
+          data.recovered
+        );
+        drawGraph(data.graph);
+      }
+
+      form.addEventListener("submit", runSimulation);
+      const infSlider = document.getElementById("infectionProb");
+      const infVal = document.getElementById("infectionProbVal");
+      infSlider.addEventListener("input", () => {
+        infVal.textContent = Number(infSlider.value).toFixed(2);
+      });
+      // Initialize displayed slider values
+      infVal.textContent = Number(infSlider.value).toFixed(2);
+      // Run once on load with defaults.
+      form.dispatchEvent(new Event("submit"));
+    </script>
+  </body>
+</html>
